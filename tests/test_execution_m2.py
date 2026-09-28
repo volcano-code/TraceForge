@@ -88,14 +88,31 @@ def test_failed_authority_check_stops_execution(tmp_path):
     assert r.termination=='authority_check_failed'
 
 
+def ordinary_child_stopped(pid):
+    """Process disappearance between open/read is successful cleanup, not a failure."""
+    try:
+        stat = Path(f'/proc/{pid}/stat').read_text()
+    except (FileNotFoundError, ProcessLookupError):
+        return True
+    # comm may contain spaces; state follows the final closing parenthesis.
+    return stat.rsplit(')', 1)[1].split()[0] == 'Z'
+
+
+@pytest.mark.parametrize('error', [FileNotFoundError, ProcessLookupError])
+def test_proc_cleanup_probe_handles_disappearance(monkeypatch, error):
+    def vanished(*args, **kwargs):
+        raise error('process was already reaped')
+    monkeypatch.setattr(Path, 'read_text', vanished)
+    assert ordinary_child_stopped(12345)
+
+
 def test_process_group_cleanup_covers_ordinary_child(tmp_path):
     code='import subprocess,sys,time; p=subprocess.Popen([sys.executable,"-c","import time; time.sleep(15)"]); print(p.pid,flush=True); time.sleep(15)'
     r=command(tmp_path,code,timeout=2.0)
     assert r.termination=='timeout'
     pid=int(r.stdout.strip())
     for _ in range(30):
-        stat=Path(f'/proc/{pid}/stat')
-        if not stat.exists() or stat.read_text().split()[2]=='Z': break
+        if ordinary_child_stopped(pid): break
         time.sleep(.02)
     else: pytest.fail('ordinary child process remained running')
 
