@@ -27,7 +27,8 @@ jobs:
           mkdir -p reports/ci
           exec > >(tee reports/ci/rootless-setup.log) 2>&1
           sudo apt-get update -q
-          if ! apt-cache show docker-ce-rootless-extras >/dev/null 2>&1; then
+          CANDIDATE=$(apt-cache policy docker-ce-rootless-extras | awk '/Candidate:/ {print $2}')
+          if [ -z "$CANDIDATE" ] || [ "$CANDIDATE" = '(none)' ]; then
             sudo install -m 0755 -d /etc/apt/keyrings
             sudo curl --proto '=https' --tlsv1.2 -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/traceforge-docker.asc
             sudo chmod a+r /etc/apt/keyrings/traceforge-docker.asc
