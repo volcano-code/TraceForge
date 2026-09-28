@@ -99,7 +99,15 @@ class DockerFixtureBackend:
         if check.termination != 'completed':
             raise DomainError('SANDBOX_CLEANUP_UNCONFIRMED','Container cleanup could not be verified',503)
         if check.exit_code != 0:
-            missing = 'No such object' in check.stderr or 'No such container' in check.stderr
+            # Docker versions differ in casing. Accept only an exact daemon
+            # absence message for THIS container; substring matches can confuse
+            # a different object or a transport failure with confirmed cleanup.
+            missing_messages = {
+                f'{prefix} no such {kind}: {name}'.casefold()
+                for prefix in ('error:', 'error response from daemon:')
+                for kind in ('object', 'container')
+            }
+            missing = check.stderr.strip().casefold() in missing_messages
             if completed and missing:
                 return  # Completed --rm invocation, then confirmed missing by the daemon.
             raise DomainError('SANDBOX_CLEANUP_UNCONFIRMED','Do not retry until a possible orphan is reconciled',503)
