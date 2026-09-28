@@ -1,0 +1,72 @@
+name: traceforge-finalize-bootstrap
+on:
+  push:
+    branches: ['fix/m2-hardening-20260929']
+    paths: ['.github/workflows/finish-bootstrap.yml']
+permissions:
+  contents: write
+concurrency:
+  group: traceforge-finalize-bootstrap
+  cancel-in-progress: false
+jobs:
+  finalize:
+    if: github.repository == 'volcano-code/TraceForge' && github.ref == 'refs/heads/fix/m2-hardening-20260929'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with: {ref: fix/m2-hardening-20260929}
+      - uses: actions/setup-node@v4
+        with: {node-version: '22'}
+      - name: Apply exact reviewed procfs test repair
+        run: |
+          python3 - <<'PY'
+          import hashlib
+          from pathlib import Path
+          p = Path('tests/test_execution_m2.py')
+          assert hashlib.sha256(p.read_bytes()).hexdigest() == '3463c197b56caba545ed63f0ad63efff44aad73fa02d3ba35e8284a1f6ef1dd9'
+          text = p.read_text()
+          before = "        stat=Path(f'/proc/{pid}/stat')\n        if not stat.exists() or stat.read_text().split()[2]=='Z': break"
+          assert text.count(before) == 1
+          text = text.replace(before, '        if ordinary_child_stopped(pid): break')
+          anchor = 'def test_process_group_cleanup_covers_ordinary_child(tmp_path):'
+          helper = '''def ordinary_child_stopped(pid):
+              """Process disappearance between open/read is successful cleanup, not a failure."""
+              try:
+                  stat = Path(f'/proc/{pid}/stat').read_text()
+              except (FileNotFoundError, ProcessLookupError):
+                  return True
+              # comm may contain spaces; state follows the final closing parenthesis.
+              return stat.rsplit(')', 1)[1].split()[0] == 'Z'
+          
+          
+          @pytest.mark.parametrize('error', [FileNotFoundError, ProcessLookupError])
+          def test_proc_cleanup_probe_handles_disappearance(monkeypatch, error):
+              def vanished(*args, **kwargs):
+                  raise error('process was already reaped')
+              monkeypatch.setattr(Path, 'read_text', vanished)
+              assert ordinary_child_stopped(12345)
+          
+          
+          '''
+          assert text.count(anchor) == 1
+          text = text.replace(anchor, helper + anchor)
+          assert hashlib.sha256(text.encode()).hexdigest() == 'bb006116bbf0e3d288883229e1bc158740a60787969f16b71533d60a702b90a6'
+          p.write_text(text)
+          PY
+      - name: Resolve lockfile without dependency lifecycle execution
+        working-directory: frontend
+        run: npm install --package-lock-only --ignore-scripts
+      - name: Commit only reviewed test repair and lockfile
+        run: |
+          git add -- tests/test_execution_m2.py frontend/package-lock.json
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'fix: tolerate procfs exit race and lock frontend dependencies'
+          git push origin HEAD:refs/heads/fix/m2-hardening-20260929
+      - uses: actions/upload-artifact@v4
+        with:
+          name: final-bootstrap-files
+          path: |
+            frontend/package-lock.json
+            tests/test_execution_m2.py
