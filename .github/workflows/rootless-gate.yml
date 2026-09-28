@@ -1,0 +1,38 @@
+name: traceforge-rootless-live-gate
+on:
+  push:
+    branches: ['fix/m2-hardening-20260929']
+    paths: ['.github/workflows/rootless-gate.yml', 'src/traceforge/execution/**', 'tests_live/test_docker_gate.py']
+  pull_request:
+    paths: ['.github/workflows/rootless-gate.yml', 'src/traceforge/execution/**', 'tests_live/test_docker_gate.py']
+permissions:
+  contents: read
+jobs:
+  rootless:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.13'}
+      - run: python -m pip install -e '.[test]'
+      - name: Start rootless daemon without relaxing host security policy
+        run: |
+          mkdir -p reports/ci
+          command -v dockerd-rootless-setuptool.sh
+          command -v newuidmap
+          dockerd-rootless-setuptool.sh install --force
+          echo "TF_SANDBOX_DOCKER_HOST=unix:///run/user/$(id -u)/docker.sock" >> "$GITHUB_ENV"
+      - name: Provision official Python image and freeze the resolved content identity
+        run: |
+          docker --host "$TF_SANDBOX_DOCKER_HOST" info --format '{{json .}}' > reports/ci/docker-info.json
+          docker --host "$TF_SANDBOX_DOCKER_HOST" pull python:3.13-slim
+          IMAGE_ID=$(docker --host "$TF_SANDBOX_DOCKER_HOST" image inspect --format '{{.Id}}' python:3.13-slim)
+          echo "TF_SANDBOX_IMAGE_ID=$IMAGE_ID" >> "$GITHUB_ENV"
+          printf '%s\n' "$IMAGE_ID" > reports/ci/image-id.txt
+      - name: Execute strict live fixture gate (missing prerequisites fail, not skip)
+        run: python -m pytest tests_live/test_docker_gate.py -q --junitxml=reports/ci/docker.xml
+        env: {PYTEST_DISABLE_PLUGIN_AUTOLOAD: '1'}
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: {name: rootless-live-evidence, path: reports/ci}
