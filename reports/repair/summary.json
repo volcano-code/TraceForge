@@ -1,0 +1,26 @@
+{
+  "release": "0.3.1-dev.0",
+  "source_archive_sha256": "8cf8f299b6619cbee331a29afc584db89b938c3fb590f747ea332bf757c7a9f5",
+  "baseline": {
+    "python_passed": 152
+  },
+  "local_tests": {
+    "python_passed": 166,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "node_passed": 23,
+    "http_checks": 13,
+    "reliability_scenarios": 6
+  },
+  "not_verified": [
+    "live Docker isolation",
+    "React full typecheck/build/E2E",
+    "live PostgreSQL",
+    "OpenHands/model loop",
+    "TraceForge product GitHub App/PR delivery"
+  ],
+  "github_publication_is_not_product_integration": true,
+  "scope": "Reviewed fixtures only. No arbitrary repositories, no autonomous model patching.",
+  "generated_at": "2026-09-28T17:39:26.813985+00:00"
+}
