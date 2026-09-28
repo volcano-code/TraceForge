@@ -7,20 +7,48 @@ on:
     paths: ['.github/workflows/rootless-gate.yml', 'src/traceforge/execution/**', 'tests_live/test_docker_gate.py']
 permissions:
   contents: read
+concurrency:
+  group: traceforge-rootless-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
   rootless:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 12
     steps:
       - uses: actions/checkout@v4
+        with: {persist-credentials: false}
       - uses: actions/setup-python@v5
         with: {python-version: '3.13'}
       - run: python -m pip install -e '.[test]'
-      - name: Start rootless daemon without relaxing host security policy
+      - name: Provision official rootless prerequisites on the disposable runner
+        shell: bash
         run: |
+          set -euo pipefail
           mkdir -p reports/ci
+          exec > >(tee reports/ci/rootless-setup.log) 2>&1
+          sudo apt-get update -q
+          if ! apt-cache show docker-ce-rootless-extras >/dev/null 2>&1; then
+            sudo install -m 0755 -d /etc/apt/keyrings
+            sudo curl --proto '=https' --tlsv1.2 -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/traceforge-docker.asc
+            sudo chmod a+r /etc/apt/keyrings/traceforge-docker.asc
+            . /etc/os-release
+            printf 'Types: deb\nURIs: https://download.docker.com/linux/ubuntu\nSuites: %s\nComponents: stable\nArchitectures: %s\nSigned-By: /etc/apt/keyrings/traceforge-docker.asc\n' "${UBUNTU_CODENAME:-$VERSION_CODENAME}" "$(dpkg --print-architecture)" | sudo tee /etc/apt/sources.list.d/traceforge-docker.sources
+            sudo apt-get update -q
+          fi
+          sudo apt-get install -y uidmap dbus-user-session docker-ce-rootless-extras
           command -v dockerd-rootless-setuptool.sh
           command -v newuidmap
+          command -v newgidmap
+          grep "^$(id -un):" /etc/subuid
+          grep "^$(id -un):" /etc/subgid
+          dpkg-query -W uidmap docker-ce-rootless-extras
+      - name: Start rootless daemon without relaxing host security policy
+        shell: bash
+        run: |
+          set -euo pipefail
+          exec > >(tee -a reports/ci/rootless-setup.log) 2>&1
+          # --force only permits co-existence with a rootful daemon. All test calls
+          # explicitly use the rootless Unix socket; no rootful fallback is allowed.
           dockerd-rootless-setuptool.sh install --force
           echo "TF_SANDBOX_DOCKER_HOST=unix:///run/user/$(id -u)/docker.sock" >> "$GITHUB_ENV"
       - name: Provision official Python image and freeze the resolved content identity
