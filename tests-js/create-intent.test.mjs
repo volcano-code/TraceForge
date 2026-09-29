@@ -1,0 +1,22 @@
+import {test} from 'node:test';
+import assert from 'node:assert/strict';
+import {createIntentManager} from '../src/traceforge/static/create-intent.mjs';
+const payload={project_id:'p',objective:'repair actual test',runtime:'fixture'};
+const receipt=intent=>({id:'run-1',...intent.payload,request_key:intent.key});
+const manager=()=>{let n=0;return createIntentManager(()=>`test-intent-${++n}`);};
+test('lost response reuses key and frozen payload, only one committed task',async()=>{
+ const m=manager(),db=new Map(),keys=[];m.prepare(payload);
+ const transport=async i=>{keys.push(i.key);if(!db.has(i.key))db.set(i.key,receipt(i));if(keys.length===1)throw new Error('response lost');return db.get(i.key);};
+ await assert.rejects(m.submit(transport));assert.equal(m.snapshot().phase,'uncertain');
+ const found=await m.submit(transport);assert.equal(found.id,'run-1');assert.equal(new Set(keys).size,1);assert.equal(db.size,1);
+});
+test('same intent survives prepare and ignores object key order',()=>{const m=manager();const a=m.prepare(payload);assert.equal(m.prepare({objective:payload.objective,project_id:'p'}),a);});
+test('payload cannot change while outcome is unresolved',()=>{const m=manager();m.prepare(payload);assert.throws(()=>m.prepare({...payload,objective:'different'}));assert.throws(()=>m.startNew());});
+test('simultaneous clicks share one in-flight transport',async()=>{const m=manager();m.prepare(payload);let calls=0;let finish;const pending=new Promise(r=>finish=r);const transport=async i=>{calls++;await pending;return receipt(i);};const a=m.submit(transport),b=m.submit(transport);assert.equal(a,b);finish();await a;assert.equal(calls,1);});
+test('successful receipt is reused after navigation failure',async()=>{const m=manager();m.prepare(payload);const run=await m.submit(async i=>receipt(i));assert.equal(await m.submit(()=>{throw new Error('must not resubmit');}),run);});
+test('only explicit new-task action allocates a new key',async()=>{const m=manager();const first=m.prepare(payload);await m.submit(async i=>receipt(i));m.startNew();assert.notEqual(m.prepare(payload).key,first.key);});
+test('logout resets intent and late response cannot restore previous session',async()=>{const m=manager();m.prepare(payload);let finish;const response=new Promise(r=>finish=r);const p=m.submit(async i=>{await response;return receipt(i);});m.resetSession();m.prepare({...payload,project_id:'new-session'});finish();await assert.rejects(p);assert.equal(m.snapshot().payload.project_id,'new-session');assert.equal(m.snapshot().phase,'prepared');});
+for (const field of ['request_key','id','project_id','objective','runtime'])test(`wrong ${field} receipt remains unresolved`,async()=>{const m=manager();m.prepare(payload);await assert.rejects(m.submit(async i=>({...receipt(i),[field]:field==='id'?'':'wrong'})));assert.equal(m.snapshot().phase,'uncertain');});
+test('payload cannot be mutated after preparation',()=>{const m=manager();const p={...payload};const i=m.prepare(p);p.objective='changed';assert.equal(i.payload.objective,payload.objective);assert.throws(()=>{i.payload.project_id='other';});});
+test('listeners receive state changes and can unsubscribe',async()=>{const m=manager(),states=[];const off=m.subscribe(()=>states.push(m.snapshot()?.phase));m.prepare(payload);await m.submit(async i=>receipt(i));off();m.startNew();assert.deepEqual(states,['prepared','submitting','resolved']);});
+test('logout before transport dispatch prevents the old submission',async()=>{const m=manager();m.prepare(payload);let calls=0;const p=m.submit(async i=>{calls++;return receipt(i);});m.resetSession();await assert.rejects(p);assert.equal(calls,0);});

@@ -21,6 +21,14 @@ from ..domain import DomainError
 IMAGE_PATTERN = r'^sha256:[a-f0-9]{64}$'
 
 
+class DockerAttemptError(DomainError):
+    """Preserve observed lifecycle even if validation or cleanup subsequently fails."""
+    def __init__(self, error: DomainError, attempt: dict):
+        super().__init__(error.code, error.message, error.status)
+        self.attempt = dict(attempt)
+
+
+
 class DockerFixtureBackend:
     name = 'docker_fixture'
     def __init__(self, image_id: str, docker_host: str, *, runner=None, binary: str | None = None):
@@ -122,19 +130,59 @@ class DockerFixtureBackend:
             raise DomainError('SANDBOX_CLEANUP_UNCONFIRMED','Container removal not confirmed',503)
 
     def run(self,snapshot: ReviewedInput,*,cancelled=None) -> dict:
-        snapshot.validate()
-        readiness = self.preflight()
         owner = uuid.uuid4().hex
         name = 'tf-fixture-'+owner
-        result = None
-        with snapshot.staged() as root:
-            try:
-                result = self._call(self.launch_args(root,name,owner),timeout=10,cancelled=cancelled)
-            finally:
-                # Killing a Docker CLI is not the same as stopping its container.
-                # Inspect ownership and remove only this attempt's container.
-                self._cleanup(name,owner,result is not None and result.termination == 'completed' and result.exit_code in (0,1))
-        environment = {'backend':self.name,'snapshot_staged':True,'image_id':self.image_id,
-                       'server_version':readiness['server_version'],'rootless':True,'network':'none',
-                       'read_only_input':True,'read_only_root':True,'host_fallback':False}
-        return decode_result(result,snapshot,'trusted_fixture_docker',environment)
+        attempt = {'schema_version':'tf-execution-attempt/v1', 'attempt_id':owner,
+                   'container_name':name, 'container_id':None,
+                   'launch_attempted':False, 'invocation_completed':None,
+                   'execution_completed':None, 'validation_passed':None,
+                   'cleanup_confirmed':None, 'failure_stage':None,
+                   'execution_error':None, 'cleanup_error':None,
+                   'observation_scope':'CLI invocation and validated reviewed-fixture output; '
+                       'null means unknown, not false. Not a persisted orphan ledger.'}
+        stage, result, decoded, failure = 'input', None, None, None
+        try:
+            snapshot.validate()
+            stage = 'preflight'
+            readiness = self.preflight()
+            environment = {'backend':self.name,'snapshot_staged':True,'image_id':self.image_id,
+                           'server_version':readiness['server_version'],'rootless':True,'network':'none',
+                           'read_only_input':True,'read_only_root':True,'host_fallback':False}
+            stage = 'staging'
+            with snapshot.staged() as root:
+                try:
+                    args = self.launch_args(root,name,owner)
+                    stage = 'launch'
+                    # This marks a requested invocation, NOT proof a container started.
+                    attempt['launch_attempted'] = True
+                    result = self._call(args,timeout=10,cancelled=cancelled)
+                    attempt['invocation_completed'] = result.termination == 'completed'
+                    stage = 'decode' if result.termination == 'completed' else 'execution'
+                    decoded = decode_result(result,snapshot,'trusted_fixture_docker',environment)
+                    # A completed CLI alone is insufficient; require a valid grader result.
+                    attempt['execution_completed'] = True
+                    attempt['validation_passed'] = decoded['exit_code'] == 0
+                except DomainError as error:
+                    failure = error
+                    attempt['failure_stage'] = stage
+                    attempt['execution_error'] = error.code
+                finally:
+                    if attempt['launch_attempted']:
+                        try:
+                            self._cleanup(name,owner,result is not None and result.termination == 'completed'
+                                          and result.exit_code in (0,1))
+                            attempt['cleanup_confirmed'] = True
+                        except DomainError as error:
+                            attempt['cleanup_error'] = error.code
+                            attempt['failure_stage'] = 'cleanup'
+                            failure = error  # Preserve execution_error as well; never hide unsafe cleanup.
+            if failure is not None:
+                raise failure
+        except DomainError as error:
+            attempt['failure_stage'] = attempt['failure_stage'] or stage
+            raise DockerAttemptError(error,attempt) from error
+        except Exception as error:
+            attempt['failure_stage'] = attempt['failure_stage'] or stage
+            wrapped = DomainError('DOCKER_DRIVER_ERROR','Unexpected driver failure; inspect the recorded attempt',503)
+            raise DockerAttemptError(wrapped,attempt) from error
+        return {**decoded, 'execution_attempt':attempt}

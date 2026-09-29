@@ -1,3 +1,4 @@
+import {createIntentManager} from './create-intent.mjs';
 import {createSSEParser,mergeEvents,reviewBinding,canApprove,stopped,phases,labels} from './protocol.mjs';
 const $=id=>document.getElementById(id);
 let token='',meta=null,projects=[],runs=[],selected=null,run=null,artifactList=[],events=[],pane='patch';
@@ -97,9 +98,22 @@ async function startStream(id){
 }
 async function action(fn){busy=true;updateReview();try{notify();await fn();await refreshSelected();await refreshList();}catch(e){notify(e.message);}finally{busy=false;updateReview();}}
 $('login-form').addEventListener('submit',e=>{e.preventDefault();login($('token').value).catch(error=>{token='';notify(error.message);});});
-$('switch-token').addEventListener('click',()=>{streamController?.abort();clearInterval(pollTimer);token='';meta=null;selected=null;run=null;events=[];reviewedBinding='';$('login').hidden=false;$('authenticated').hidden=true;$('connection').textContent='未连接';});
+$('switch-token').addEventListener('click',()=>{intents.resetSession();streamController?.abort();clearInterval(pollTimer);token='';meta=null;selected=null;run=null;events=[];reviewedBinding='';$('login').hidden=false;$('authenticated').hidden=true;$('connection').textContent='未连接';});
 $('project').addEventListener('change',updateObjective);
-$('task-form').addEventListener('submit',async e=>{e.preventDefault();await action(async()=>{const created=await api('/runs',{method:'POST',headers:{'Idempotency-Key':crypto.randomUUID()},body:JSON.stringify({project_id:$('project').value,objective:$('objective').value,runtime:'fixture'})});await selectRun(created.id);});});
+const intents=createIntentManager();
+const intentStatus=element('p','','helper');intentStatus.setAttribute('role','status');
+const newTask=element('button','开始新任务','button quiet');newTask.type='button';newTask.hidden=true;
+$('task-form').append(intentStatus,newTask);
+intents.subscribe(()=>{const i=intents.snapshot();$('project').disabled=!!i;$('objective').readOnly=!!i;
+  intentStatus.textContent=i?`请求 ${i.key} · ${i.phase}；结果不明时仅使用原键核实。刷新或退出后先查任务列表。`:'';
+  newTask.hidden=i?.phase!=='resolved';
+});
+newTask.addEventListener('click',()=>{intents.startNew();});
+$('task-form').addEventListener('submit',async e=>{e.preventDefault();await action(async()=>{
+  intents.prepare(intents.snapshot()?.payload||{project_id:$('project').value,objective:$('objective').value,runtime:'fixture'});
+  const created=await intents.submit(i=>api('/runs',{method:'POST',headers:{'Idempotency-Key':i.key},signal:AbortSignal.timeout(15000),body:JSON.stringify(i.payload)}));
+  await selectRun(created.id);
+});});
 $('refresh').addEventListener('click',()=>action(async()=>{}));
 $('cancel').addEventListener('click',()=>action(()=>api(`/runs/${selected}/cancel`,{method:'POST'})));
 $('reviewed').addEventListener('change',()=>{reviewedBinding=$('reviewed').checked?reviewBinding(run?.approval,$('delivery-kind').value):'';updateReview();});

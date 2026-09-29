@@ -17,6 +17,7 @@ from .fixtures import FIXTURES
 from .models import Approval, Artifact, Operation, Project, Run, RunEvent, WebhookReceipt
 from .security import authenticate, verify_webhook
 from .services import Services
+from .release_info import release_info
 from .evidence import EvidenceInspector
 from .delivery.service import DeliveryService
 
@@ -57,7 +58,7 @@ def create_app(settings: Settings | None=None, database: Database | None=None) -
     def health(): return {"status":"ok","version":__version__,"mode":"trusted_fixture_only"}
     @app.get(prefix+"/meta")
     def meta(role: str=Depends(actor)):
-        return {"version":__version__,"role":role,"runtime":"fixture","real_llm_connected":False,
+        return {"release":release_info(),"version":__version__,"role":role,"runtime":"fixture","real_llm_connected":False,
           "real_github_connected":False,"evidence_audit":True,"recoverable_simulated_delivery":True,"sandbox":"configured reviewed-fixture backend; see execution readiness",
           "execution_backend":settings.execution_backend,"readiness_endpoint":"/api/v1/execution/readiness",
           "workflow":"database-checkpoint foundation; LangGraph adapter planned",

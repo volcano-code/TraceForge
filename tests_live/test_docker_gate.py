@@ -30,3 +30,7 @@ def test_live_rootless_docker_reviewed_fixtures(monkeypatch):
     assert report['status'] == 'PASS', json.dumps(record, indent=2)
     assert report['containers_executed'] == 6, report
     assert len(report['checks']) == 6 and all(item['passed'] for item in report['checks'])
+
+    assert report['launch_attempts'] == 6 and report['unknown_execution_outcomes'] == 0
+    assert report['validations_passed'] == 3
+    assert all(a['cleanup_confirmed'] is True and a['execution_completed'] is True for a in report['attempts'])
