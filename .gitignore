@@ -1,0 +1,21 @@
+.env
+.env.*
+!.env.example
+.traceforge/
+*.db
+*.db-*
+*.sqlite*
+.venv/
+node_modules/
+dist/
+__pycache__/
+*.pyc
+*.egg-info/
+.pytest_cache/
+.coverage
+htmlcov/
+.DS_Store
+
+# Generated release metadata
+MANIFEST.sha256
+RELEASE.json

@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>TraceForge · Evidence-first workbench</title>
+<link rel="stylesheet" href="/workbench-assets/style.css">
+</head>
+<body>
+<aside class="sidebar">
+  <a class="brand" href="/workbench"><span class="brand-mark">T<span>F</span></span>TraceForge</a>
+  <div class="side-caption">DEVELOPER WORKSPACE</div>
+  <button class="nav active" data-section="runs">◈ <span>验证工作台</span></button>
+  <button class="nav" data-section="projects">▦ <span>样例项目</span></button>
+  <button class="nav" data-section="coverage">◎ <span>技术验收状态</span></button>
+  <div class="side-footer"><span class="dot"></span> M2-start · 本地开发版本<p>从失败证据到可审查补丁。<br>不把模型声明当作验证结果。</p><a href="/docs" target="_blank" rel="noreferrer">API 文档 ↗</a></div>
+</aside>
+<main>
+<header class="topbar"><span>工作空间 <span class="crumb">/</span> TraceForge Core</span><div class="top-actions"><span id="connection" class="chip">未连接</span><button id="switch-token" class="button small quiet">切换凭据</button></div></header>
+<div class="page">
+<section class="hero"><div><div class="eyebrow">EVIDENCE BEFORE CONFIDENCE</div><h1>每一次修复，都有据可查。</h1><p>复现、补丁、独立验证与人工审批，汇聚于一个工作台。</p></div><div class="release">0.3.0-dev.1 <span>VERIFIED DELIVERY</span></div></section>
+<div class="notice"><strong>明确的验证边界</strong><span>当前仅运行三个受控缺陷样例。补丁来自确定性执行器，未调用 LLM；“交付”只生成本地回执，不创建 GitHub PR。</span></div>
+<div id="alert" class="alert" role="alert" hidden></div>
+<section id="login" class="card login"><h2>连接本地工作区</h2><p>运行 bootstrap.py 后，从本机 .env 读取 Reviewer Token。凭据只保存在当前页面内存中，不写入 URL 或浏览器持久存储。</p><form id="login-form"><label for="token">访问令牌</label><div class="input-row"><input id="token" type="password" autocomplete="off" placeholder="粘贴 TF_REVIEWER_TOKEN" required><button class="button" type="submit">连接工作区 →</button></div></form></section>
+<div id="authenticated" hidden>
+<div class="stats"><article><span>当前列表任务</span><strong id="stat-total">0</strong><small>本地真实执行记录</small></article><article><span>待人工审阅</span><strong id="stat-review">0</strong><small>批准绑定补丁和报告</small></article><article><span>已完成本地／模拟交付</span><strong id="stat-done">0</strong><small>不代表已创建 PR</small></article><article><span>真实模型调用</span><strong>0</strong><small>Fixture 模式，不计算 Agent 成功率</small></article></div>
+<section id="section-runs" class="section-view">
+  <div class="workspace-grid"><section class="card task-list"><div class="card-head"><h2>验证任务</h2><button id="refresh" class="button small quiet">刷新</button></div><form id="task-form"><label for="project">选择受控样例</label><select id="project"></select><label for="objective">问题描述</label><textarea id="objective" rows="3" minlength="5" maxlength="4000" required></textarea><button class="button wide" type="submit">＋ 新建验证任务</button></form><p class="helper">任务由独立 Worker 执行；停留在“已入队”时，请检查 Worker 是否启动。</p><div class="divider"></div><div id="run-list"></div></section>
+  <section class="card execution"><div id="empty" class="empty"><div class="empty-icon">⌘</div><h2>选择或新建一个验证任务</h2><p>每次执行都会冻结代码版本，<br>保留前后测试结果与补丁哈希。</p></div><div id="run-detail" hidden><div class="card-head"><div><span class="eyebrow">RUN DETAIL</span><h2 id="run-title"></h2></div><span id="run-status" class="status"></span></div><div class="run-meta"><span id="run-id"></span><span id="base-sha"></span><button id="cancel" class="button small danger">取消任务</button></div><div id="phase-track" class="phase-track"></div><div class="pane-tabs"><button class="tab active" data-pane="patch">代码补丁</button><button class="tab" data-pane="validation">验证报告</button><button class="tab" data-pane="reproduction">修改前</button><button class="tab" data-pane="regression">修改后</button><button class="tab" data-pane="delivery">本地回执</button><button class="tab" data-pane="simulated_delivery">模拟端回执</button></div><div class="artifact-toolbar"><span id="artifact-label">尚无制品</span><button id="download" class="button small quiet" disabled>导出制品 ↓</button></div><div class="artifact-toolbar"><button id="audit-evidence" class="button small quiet">检查证据</button><button id="export-evidence" class="button small quiet">导出完整证据包 ↓</button><span id="evidence-status" aria-live="polite">证据审计不会重新执行测试</span></div><pre id="artifact-content" class="code-area">正在等待执行结果…</pre><div id="review-panel" class="review" hidden><div><h3>人工审阅</h3><p id="review-description"></p></div><label for="delivery-kind">批准的操作范围</label><select id="delivery-kind"><option value="LOCAL_RECEIPT">仅生成本地回执</option><option value="SIMULATED_PR">向独立 SQLite 模拟端交付（不连接 GitHub）</option></select><label class="check"><input id="reviewed" type="checkbox">我已审阅当前补丁与验证报告，允许执行上方所选的交付操作。</label><div class="review-actions"><button id="approve" class="button" disabled>批准当前补丁</button><button id="reject" class="button quiet">拒绝</button><button id="deliver" class="button" hidden>生成本地回执</button><button id="reconcile" class="button quiet" hidden>只读核实外部结果</button></div></div><details class="trace-details" open><summary>执行事件 <span id="event-count">0</span></summary><div id="events" class="events"></div></details></div></section></div>
+</section>
+<section id="section-projects" class="section-view" hidden><div class="card"><div class="card-head"><h2>受控样例项目</h2><span class="chip">3 个公开测试夹具</span></div><p class="helper">这些样例用于验证工程流程，不是冻结 Agent Benchmark，也不代表已接入真实仓库。</p><div id="project-cards" class="project-grid"></div></div></section>
+<section id="section-coverage" class="section-view" hidden><div class="card"><div class="card-head"><h2>执行环境预检</h2><button id="check-execution">检查执行条件</button></div><p>预检不等于容器隔离验收。不调用模型、不创建 PR、不自动拉取镜像。</p><pre id="execution-readiness">尚未检查</pre></div><div class="card"><div class="card-head"><h2>实现与验收分离</h2><span class="chip">不把计划当结果</span></div><table><thead><tr><th>能力</th><th>本版本状态</th></tr></thead><tbody><tr><td>任务 API、状态与事件、SQLite 持久化</td><td>已实现；自动测试</td></tr><tr><td>固定样例的复现、Git 补丁、独立新检出验证</td><td>已实现；非 LLM</td></tr><tr><td>审批哈希绑定、本地幂等交付、Webhook 验签</td><td>已实现；本地测试</td></tr><tr><td>完整证据审计、明确动作审批、丢响应核实</td><td>M1 新增；独立模拟端，不是真实 PR</td></tr><tr><td>捕获输入、进程输出上限、取消及超时</td><td>M2-start：受控本地进程测试；非恶意代码沙箱</td></tr><tr><td>严格 Docker 执行驱动与预检</td><td>代码与契约测试；实机验收未通过，不回退宿主机</td></tr><tr><td>React / TypeScript 前端</td><td>源码已提供；完整构建待联网验收</td></tr><tr><td>OpenHands / LangGraph / DeepSeek Harness</td><td>分阶段规划，尚未集成</td></tr><tr><td>真实 GitHub App / PR / Docker 沙箱</td><td>尚未联调，禁止宣称完成</td></tr><tr><td>MCP / A2A / AG-UI / RAG / Memory / 路由</td><td>已列入技术覆盖清单</td></tr><tr><td>SFT / RL / GraphRAG / RLM / ACP / 生成式 UI</td><td>可插拔研究扩展</td></tr></tbody></table></div></section>
+</div>
+<footer>TraceForge · M2-start <span>Local-first / Evidence-driven / Explicit limitations</span></footer>
+</div></main><script type="module" src="/workbench-assets/app.mjs"></script>
+</body></html>

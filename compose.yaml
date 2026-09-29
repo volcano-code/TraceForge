@@ -1,0 +1,45 @@
+# NOT live-tested. Does not provide an untrusted-code sandbox.
+x-common: &common
+  build: .
+  environment:
+    TF_DATABASE_URL: postgresql+psycopg://traceforge:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/traceforge
+    TF_DATA_DIR: /data
+    TF_DEVELOPER_TOKEN: ${TF_DEVELOPER_TOKEN:?Run scripts/bootstrap.py first}
+    TF_REVIEWER_TOKEN: ${TF_REVIEWER_TOKEN:?Run scripts/bootstrap.py first}
+    TF_WEBHOOK_SECRET: ${TF_WEBHOOK_SECRET:?Run scripts/bootstrap.py first}
+  volumes:
+    - artifacts:/data
+  security_opt:
+    - no-new-privileges:true
+  cap_drop: [ALL]
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: traceforge
+      POSTGRES_USER: traceforge
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -U traceforge -d traceforge"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+  init:
+    <<: *common
+    command: [python, -m, traceforge.cli, init]
+    depends_on:
+      postgres: {condition: service_healthy}
+  api:
+    <<: *common
+    ports: ["127.0.0.1:8000:8000"]
+    depends_on:
+      init: {condition: service_completed_successfully}
+  worker:
+    <<: *common
+    command: [python, -m, traceforge.worker]
+    depends_on:
+      init: {condition: service_completed_successfully}
+volumes:
+  pgdata:
+  artifacts:

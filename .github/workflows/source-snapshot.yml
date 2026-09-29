@@ -1,0 +1,28 @@
+name: traceforge-source-snapshot
+on:
+  push:
+    branches: ['fix/m2-hardening-20260929']
+permissions:
+  contents: read
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+        with: {persist-credentials: false}
+      - name: Archive tracked source without running repository code
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/traceforge-snapshot"
+          git archive --format=zip --prefix=traceforge/ -o "$RUNNER_TEMP/traceforge-snapshot/source.zip" HEAD
+          git rev-parse HEAD > "$RUNNER_TEMP/traceforge-snapshot/commit.txt"
+          git rev-parse HEAD^{tree} > "$RUNNER_TEMP/traceforge-snapshot/tree.txt"
+          cd "$RUNNER_TEMP/traceforge-snapshot"
+          sha256sum source.zip > SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: source-snapshot
+          path: ${{ runner.temp }}/traceforge-snapshot
+          retention-days: 14
+          if-no-files-found: error
