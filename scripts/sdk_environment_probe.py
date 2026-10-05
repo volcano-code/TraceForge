@@ -1,10 +1,7 @@
-"""Standalone SDK installation/API probe, NOT a product-runtime acceptance test.
-
-No TraceForge runtime is imported. No repository code is executed. Model
-responses below are explicitly scripted; this is not a real provider call.
-"""
+"""Standalone real-SDK probe; scripted completions, no product runtime or provider."""
 from __future__ import annotations
 import importlib.metadata
+import inspect
 import json
 import socket
 import tempfile
@@ -20,14 +17,14 @@ def main():
               'product_runtime_tested': False, 'real_model_called': False,
               'candidate_code_executed': False, 'provider_calls': 0}
     try:
-        versions = {name: importlib.metadata.version(name)
-                    for name in ('openhands-sdk', 'openhands-tools')}
+        versions = {name: importlib.metadata.version(name) for name in ('openhands-sdk', 'openhands-tools')}
         report['packages'] = versions
-        assert all(v == PIN for v in versions.values()), 'Pinned packages mismatch'
+        assert all(v == PIN for v in versions.values())
         from openhands.sdk import Action, Agent, Conversation, LLM, Observation, TextContent, ToolDefinition
         from openhands.sdk.tool import Tool, ToolExecutor, register_tool
         from litellm import ModelResponse
         from pydantic import SecretStr
+        report['conversation_arguments'] = list(inspect.signature(Conversation.__new__).parameters)
         completions, actions, events = [], [], []
 
         class ProbeAction(Action):
@@ -47,9 +44,8 @@ def main():
         class EnvironmentProbeTool(ToolDefinition):
             @classmethod
             def create(cls, conv_state=None, **kwargs):
-                return [cls(description='In-memory echo for installation verification only.',
-                            action_type=ProbeAction, observation_type=ProbeObservation,
-                            executor=ProbeExecutor())]
+                return [cls(description='In-memory installation probe, no filesystem operations.',
+                            action_type=ProbeAction, observation_type=ProbeObservation, executor=ProbeExecutor())]
 
         class ScriptedLLM(LLM):
             def completion(self, messages, tools=None, **kwargs):
@@ -77,20 +73,20 @@ def main():
                 api_key=SecretStr('synthetic-probe-not-a-key'), usage_id='sdk-environment-probe', num_retries=0)
             with tempfile.TemporaryDirectory(prefix='tf-sdk-probe-') as tmp:
                 conversation = Conversation(agent=Agent(llm=llm, tools=[Tool(name=EnvironmentProbeTool.name)]),
-                    workspace=tmp, plugins=[], profile_store_dir=Path(tmp) / 'profiles', visualizer=None,
-                    callbacks=[lambda event: events.append(type(event).__name__)],
-                    max_iteration_per_run=4, max_budget_per_run=0.1)
+                    workspace=tmp, plugins=[], persistence_dir=Path(tmp) / 'records', visualizer=None,
+                    callbacks=[lambda event: events.append(type(event).__name__)], max_iteration_per_run=4)
                 try:
                     conversation.send_message('Use the in-memory echo probe, then finish.')
                     conversation.run()
                     terminal = str(conversation.state.execution_status)
                     assert terminal.split('.')[-1].lower() == 'finished', terminal
+                    snapshot = llm.metrics.get_snapshot()
+                    report['metric_fields'] = sorted(snapshot.model_dump(mode='json'))
                 finally:
                     conversation.close()
             assert actions == ['probe'] and len(completions) == 2
             report.update(status='PASS', scripted_completions=len(completions),
-                          real_sdk_tool_actions=len(actions), sdk_event_types=events,
-                          terminal_status=terminal)
+                          real_sdk_tool_actions=len(actions), sdk_event_types=events, terminal_status=terminal)
         finally:
             socket.socket.connect = original_connect
     except Exception as error:
