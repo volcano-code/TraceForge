@@ -36,3 +36,20 @@ jobs:
           path: dependency-evidence
           retention-days: 3
           compression-level: 0
+      - name: Capture full and production dependency audit without modifying the lockfile
+        shell: bash
+        run: |
+          set +e
+          (cd frontend && npm audit --json) > dependency-evidence/audit-full.json 2> dependency-evidence/audit-full.stderr
+          printf '%s\n' "$?" > dependency-evidence/audit-full.exit
+          (cd frontend && npm audit --omit=dev --json) > dependency-evidence/audit-production.json 2> dependency-evidence/audit-production.stderr
+          printf '%s\n' "$?" > dependency-evidence/audit-production.exit
+          exit 0
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: frontend-audit-evidence
+          path: dependency-evidence/audit-*
+          retention-days: 14
+      - name: Enforce the recorded full audit result; unresolved alerts are not green
+        run: exit "$(cat dependency-evidence/audit-full.exit)"
