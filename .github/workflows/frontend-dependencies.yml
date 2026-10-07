@@ -1,0 +1,38 @@
+name: traceforge-frontend-dependencies
+on:
+  push:
+    branches: ['chore/sdk-environment-probe-20261005']
+    paths: ['.github/workflows/frontend-dependencies.yml']
+  pull_request:
+    paths: ['.github/workflows/frontend-dependencies.yml']
+permissions:
+  contents: read
+concurrency:
+  group: frontend-dependencies-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  dependencies:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with: {persist-credentials: false}
+      - uses: actions/setup-node@v4
+        with: {node-version: '22'}
+      - name: Install existing reviewed lockfile; no local 0.4.x source is uploaded or tested here
+        run: |
+          set -euo pipefail
+          mkdir -p dependency-evidence
+          sha256sum frontend/package-lock.json > dependency-evidence/lockfile.sha256
+          (cd frontend && npm ci) > dependency-evidence/npm-ci.log 2>&1
+          node --version > dependency-evidence/node-version.txt
+          npm --version > dependency-evidence/npm-version.txt
+          tar -czf dependency-evidence/node-modules-linux-x64.tar.gz -C frontend node_modules
+          (cd dependency-evidence && sha256sum node-modules-linux-x64.tar.gz > archive.sha256)
+      - uses: actions/upload-artifact@v4
+        if: success()
+        with:
+          name: frontend-offline-dependencies
+          path: dependency-evidence
+          retention-days: 3
+          compression-level: 0
