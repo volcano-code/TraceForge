@@ -1,0 +1,57 @@
+name: traceforge-sdk-wheelhouse
+on:
+  push:
+    branches: ['chore/sdk-environment-probe-20261005']
+    paths: ['.github/workflows/sdk-wheelhouse.yml']
+  pull_request:
+    paths: ['.github/workflows/sdk-wheelhouse.yml']
+permissions:
+  contents: read
+concurrency:
+  group: sdk-wheelhouse-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  resolve-dependencies:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      PIP_INDEX_URL: https://pypi.org/simple
+      PIP_DISABLE_PIP_VERSION_CHECK: '1'
+    steps:
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.13'}
+      - name: Build official dependency wheels; no product source, model key or candidate execution
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p wheelhouse evidence
+          python -m pip wheel --wheel-dir wheelhouse \
+            'openhands-sdk==1.50.0' 'openhands-tools==1.50.0' \
+            'fastapi==0.128.2' 'pydantic==2.13.4' 'pydantic-settings==2.14.1' \
+            'SQLAlchemy==2.0.50' 'alembic==1.18.4' 'uvicorn==0.48.0' \
+            'python-dotenv==1.2.2' 'pytest==9.0.2' 'pytest-cov==7.0.0' \
+            'httpx==0.28.1' 'setuptools>=75' 'psycopg[binary]>=3.2,<4' \
+            2>&1 | tee evidence/wheel-build.log
+          python -m pip install --no-index --find-links wheelhouse \
+            'openhands-sdk==1.50.0' 'openhands-tools==1.50.0' \
+            'fastapi==0.128.2' 'pydantic-settings==2.14.1' \
+            'SQLAlchemy==2.0.50' 'alembic==1.18.4' 'uvicorn==0.48.0' \
+            'python-dotenv==1.2.2' 'pytest==9.0.2' 'pytest-cov==7.0.0' \
+            'httpx==0.28.1' 'psycopg[binary]>=3.2,<4' \
+            2>&1 | tee evidence/offline-install.log
+          python -m pip check | tee evidence/pip-check.txt
+          python -m pip freeze > evidence/resolved.txt
+          (cd wheelhouse && sha256sum *.whl > SHA256SUMS)
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: sdk-wheelhouse-resolution
+          path: evidence
+          retention-days: 7
+      - uses: actions/upload-artifact@v4
+        if: success()
+        with:
+          name: sdk-offline-wheels-python313-linux
+          path: wheelhouse
+          retention-days: 3
+          compression-level: 0
