@@ -19,37 +19,60 @@ jobs:
         with: {persist-credentials: false}
       - uses: actions/setup-node@v4
         with: {node-version: '22'}
-      - name: Install existing reviewed lockfile; no local 0.4.x source is uploaded or tested here
+      - name: Prepare isolated dependency-only upgrade; no local product source or credentials
+        shell: bash
         run: |
           set -euo pipefail
-          mkdir -p dependency-evidence
-          sha256sum frontend/package-lock.json > dependency-evidence/lockfile.sha256
-          (cd frontend && npm ci) > dependency-evidence/npm-ci.log 2>&1
+          mkdir -p dependency-evidence candidate-dependencies
+          cp frontend/package.json candidate-dependencies/
+          cp frontend/package-lock.json candidate-dependencies/
+          sha256sum frontend/package-lock.json > dependency-evidence/baseline-lock.sha256
+          node <<'JS'
+          const fs=require('node:fs');
+          const p=JSON.parse(fs.readFileSync('candidate-dependencies/package.json','utf8'));
+          p.devDependencies.vitest='4.1.11';
+          p.overrides={...(p.overrides||{}),'source-map-js':'1.2.2'};
+          fs.writeFileSync('candidate-dependencies/package.json',JSON.stringify(p,null,2)+'\n');
+          JS
+          (cd candidate-dependencies && npm install --package-lock-only --ignore-scripts --no-audit --no-fund) > dependency-evidence/resolve.log 2>&1
+          (cd candidate-dependencies && npm ci --no-audit --no-fund) > dependency-evidence/npm-ci.log 2>&1
+          cp candidate-dependencies/package*.json dependency-evidence/
           node --version > dependency-evidence/node-version.txt
           npm --version > dependency-evidence/npm-version.txt
-          tar -czf dependency-evidence/node-modules-linux-x64.tar.gz -C frontend node_modules
-          (cd dependency-evidence && sha256sum node-modules-linux-x64.tar.gz > archive.sha256)
-      - uses: actions/upload-artifact@v4
+          tar -czf dependency-evidence/node-modules-linux-x64.tar.gz -C candidate-dependencies node_modules
+          (cd dependency-evidence && sha256sum package.json package-lock.json node-modules-linux-x64.tar.gz > SHA256SUMS)
+      - name: Record complete and production audits; do not suppress failed results
         if: success()
-        with:
-          name: frontend-offline-dependencies
-          path: dependency-evidence
-          retention-days: 3
-          compression-level: 0
-      - name: Capture full and production dependency audit without modifying the lockfile
         shell: bash
         run: |
           set +e
-          (cd frontend && npm audit --json) > dependency-evidence/audit-full.json 2> dependency-evidence/audit-full.stderr
+          (cd candidate-dependencies && npm audit --json) > dependency-evidence/audit-full.json 2> dependency-evidence/audit-full.stderr
           printf '%s\n' "$?" > dependency-evidence/audit-full.exit
-          (cd frontend && npm audit --omit=dev --json) > dependency-evidence/audit-production.json 2> dependency-evidence/audit-production.stderr
+          (cd candidate-dependencies && npm audit --omit=dev --json) > dependency-evidence/audit-production.json 2> dependency-evidence/audit-production.stderr
           printf '%s\n' "$?" > dependency-evidence/audit-production.exit
           exit 0
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: frontend-audit-evidence
-          path: dependency-evidence/audit-*
+          name: frontend-remediation-evidence
+          path: |
+            dependency-evidence/*.json
+            dependency-evidence/*.log
+            dependency-evidence/*.txt
+            dependency-evidence/*.exit
+            dependency-evidence/*.stderr
+            dependency-evidence/*.sha256
+            dependency-evidence/SHA256SUMS
           retention-days: 14
-      - name: Enforce the recorded full audit result; unresolved alerts are not green
-        run: exit "$(cat dependency-evidence/audit-full.exit)"
+      - uses: actions/upload-artifact@v4
+        if: success()
+        with:
+          name: frontend-remediation-dependencies
+          path: dependency-evidence/node-modules-linux-x64.tar.gz
+          retention-days: 3
+          compression-level: 0
+      - name: Require both recorded audits to pass
+        shell: bash
+        run: |
+          test "$(cat dependency-evidence/audit-full.exit)" = 0
+          test "$(cat dependency-evidence/audit-production.exit)" = 0
