@@ -40,9 +40,9 @@ jobs:
               p[group][name]=version;
             }
           }
-          p.devDependencies.vitest='4.1.11';
-          // A direct version constraint instead of an override avoids the
-          // crashing Arborist override path. npm ls/audit still gate all copies.
+          // The 4.x candidate triggered an Arborist peer cycle into 5.x.
+          // Evaluate a coherent 5.0.3 candidate, not --force or ignored peers.
+          p.devDependencies.vitest='5.0.3';
           p.devDependencies['source-map-js']='1.2.2';
           delete p.overrides;
           p.packageManager='npm@10.9.9';
