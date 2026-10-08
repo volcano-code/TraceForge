@@ -19,19 +19,20 @@ jobs:
         with: {persist-credentials: false}
       - uses: actions/setup-node@v4
         with: {node-version: '22'}
+      - name: Pin resolver on disposable runner
+        run: npm install --global npm@10.9.9
       - name: Resolve isolated public dependencies; no local product source or model secrets
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p dependency-evidence candidate-dependencies
+          node --version > dependency-evidence/node-version.txt
+          npm --version > dependency-evidence/npm-version.txt
           sha256sum frontend/package-lock.json > dependency-evidence/baseline-lock.sha256
           node <<'JS'
           const fs=require('node:fs');
           const p=JSON.parse(fs.readFileSync('frontend/package.json','utf8'));
           const lock=JSON.parse(fs.readFileSync('frontend/package-lock.json','utf8'));
-          // Pin every existing direct dependency before creating a fresh candidate
-          // lock. The baseline lock is retained and never modified. This avoids
-          // npm's edgesOut crash while documenting transitive re-resolution.
           for (const group of ['dependencies','devDependencies']) {
             for (const name of Object.keys(p[group]||{})) {
               const version=lock.packages['node_modules/'+name]?.version;
@@ -40,14 +41,17 @@ jobs:
             }
           }
           p.devDependencies.vitest='4.1.11';
-          p.overrides={...(p.overrides||{}),'source-map-js':'1.2.2'};
+          // A direct version constraint instead of an override avoids the
+          // crashing Arborist override path. npm ls/audit still gate all copies.
+          p.devDependencies['source-map-js']='1.2.2';
+          delete p.overrides;
+          p.packageManager='npm@10.9.9';
           fs.writeFileSync('candidate-dependencies/package.json',JSON.stringify(p,null,2)+'\n');
           JS
+          cp candidate-dependencies/package.json dependency-evidence/
           (cd candidate-dependencies && npm install --package-lock-only --ignore-scripts --no-audit --no-fund) > dependency-evidence/resolve.log 2>&1
           (cd candidate-dependencies && npm ci --no-audit --no-fund) > dependency-evidence/npm-ci.log 2>&1
-          cp candidate-dependencies/package*.json dependency-evidence/
-          node --version > dependency-evidence/node-version.txt
-          npm --version > dependency-evidence/npm-version.txt
+          cp candidate-dependencies/package-lock.json dependency-evidence/
           (cd candidate-dependencies && npm ls --all --json) > dependency-evidence/tree.json
           tar -czf dependency-evidence/node-modules-linux-x64.tar.gz -C candidate-dependencies node_modules
           (cd dependency-evidence && sha256sum package.json package-lock.json node-modules-linux-x64.tar.gz > SHA256SUMS)
@@ -61,6 +65,12 @@ jobs:
           (cd candidate-dependencies && npm audit --omit=dev --json) > dependency-evidence/audit-production.json 2> dependency-evidence/audit-production.stderr
           printf '%s\n' "$?" > dependency-evidence/audit-production.exit
           exit 0
+      - name: Retain resolver diagnostics on failure
+        if: failure()
+        shell: bash
+        run: |
+          mkdir -p dependency-evidence
+          cp /home/runner/.npm/_logs/*debug*.log dependency-evidence/ 2>/dev/null || true
       - uses: actions/upload-artifact@v4
         if: always()
         with:
