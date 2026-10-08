@@ -19,17 +19,26 @@ jobs:
         with: {persist-credentials: false}
       - uses: actions/setup-node@v4
         with: {node-version: '22'}
-      - name: Prepare isolated dependency-only upgrade; no local product source or credentials
+      - name: Resolve isolated public dependencies; no local product source or model secrets
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p dependency-evidence candidate-dependencies
-          cp frontend/package.json candidate-dependencies/
-          cp frontend/package-lock.json candidate-dependencies/
           sha256sum frontend/package-lock.json > dependency-evidence/baseline-lock.sha256
           node <<'JS'
           const fs=require('node:fs');
-          const p=JSON.parse(fs.readFileSync('candidate-dependencies/package.json','utf8'));
+          const p=JSON.parse(fs.readFileSync('frontend/package.json','utf8'));
+          const lock=JSON.parse(fs.readFileSync('frontend/package-lock.json','utf8'));
+          // Pin every existing direct dependency before creating a fresh candidate
+          // lock. The baseline lock is retained and never modified. This avoids
+          // npm's edgesOut crash while documenting transitive re-resolution.
+          for (const group of ['dependencies','devDependencies']) {
+            for (const name of Object.keys(p[group]||{})) {
+              const version=lock.packages['node_modules/'+name]?.version;
+              if(!version) throw new Error('Missing baseline direct version: '+name);
+              p[group][name]=version;
+            }
+          }
           p.devDependencies.vitest='4.1.11';
           p.overrides={...(p.overrides||{}),'source-map-js':'1.2.2'};
           fs.writeFileSync('candidate-dependencies/package.json',JSON.stringify(p,null,2)+'\n');
@@ -39,9 +48,10 @@ jobs:
           cp candidate-dependencies/package*.json dependency-evidence/
           node --version > dependency-evidence/node-version.txt
           npm --version > dependency-evidence/npm-version.txt
+          (cd candidate-dependencies && npm ls --all --json) > dependency-evidence/tree.json
           tar -czf dependency-evidence/node-modules-linux-x64.tar.gz -C candidate-dependencies node_modules
           (cd dependency-evidence && sha256sum package.json package-lock.json node-modules-linux-x64.tar.gz > SHA256SUMS)
-      - name: Record complete and production audits; do not suppress failed results
+      - name: Record complete and production audits without hiding their exit codes
         if: success()
         shell: bash
         run: |
