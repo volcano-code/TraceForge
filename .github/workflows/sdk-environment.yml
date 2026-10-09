@@ -1,0 +1,39 @@
+name: traceforge-sdk-environment-probe
+on:
+  push:
+    branches: ['chore/sdk-environment-probe-20261005']
+    paths: ['scripts/sdk_environment_probe.py', '.github/workflows/sdk-environment.yml']
+  pull_request:
+    paths: ['scripts/sdk_environment_probe.py', '.github/workflows/sdk-environment.yml']
+permissions:
+  contents: read
+concurrency:
+  group: sdk-environment-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  sdk-environment:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    env:
+      LITELLM_LOCAL_MODEL_COST_MAP: 'True'
+      DO_NOT_TRACK: '1'
+    steps:
+      - uses: actions/checkout@v4
+        with: {persist-credentials: false}
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.13'}
+      - name: Install exact official SDK packages (not product runtime)
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p reports/sdk-environment
+          python -m pip install 'openhands-sdk==1.50.0' 'openhands-tools==1.50.0' 2>&1 | tee reports/sdk-environment/install.log
+          python -m pip freeze > reports/sdk-environment/installed.txt
+      - name: Real SDK with explicitly scripted completions, no provider key
+        run: python scripts/sdk_environment_probe.py > reports/sdk-environment/probe.log 2>&1
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: sdk-environment-evidence
+          path: reports/sdk-environment
+          retention-days: 14
