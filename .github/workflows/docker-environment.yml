@@ -1,0 +1,81 @@
+name: traceforge-docker-environment
+on:
+  push:
+    branches: ['infra/docker-environment-20261010']
+    paths: ['infra/docker-environment/**', '.github/workflows/docker-environment.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: docker-environment-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  rootless-environment:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          sparse-checkout: infra/docker-environment
+      - name: Install official rootless prerequisites on this disposable VM
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p reports
+          exec > >(tee reports/setup.log) 2>&1
+          test "$(id -u)" -ne 0
+          test -d /run/systemd/system
+          test "$(stat -fc %T /sys/fs/cgroup)" = cgroup2fs
+          sudo apt-get update -q
+          CANDIDATE=$(apt-cache policy docker-ce-rootless-extras | awk '/Candidate:/ {print $2}')
+          if [ -z "$CANDIDATE" ] || [ "$CANDIDATE" = '(none)' ]; then
+            sudo install -m 0755 -d /etc/apt/keyrings
+            sudo curl --proto '=https' --tlsv1.2 -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/traceforge-docker.asc
+            sudo chmod a+r /etc/apt/keyrings/traceforge-docker.asc
+            . /etc/os-release
+            printf 'Types: deb\nURIs: https://download.docker.com/linux/ubuntu\nSuites: %s\nComponents: stable\nArchitectures: %s\nSigned-By: /etc/apt/keyrings/traceforge-docker.asc\n' "${UBUNTU_CODENAME:-$VERSION_CODENAME}" "$(dpkg --print-architecture)" | sudo tee /etc/apt/sources.list.d/traceforge-docker.sources
+            sudo apt-get update -q
+          fi
+          sudo apt-get install -y uidmap dbus-user-session docker-ce-rootless-extras docker-compose-plugin
+          command -v dockerd
+          command -v newuidmap
+          command -v newgidmap
+          grep "^$(id -un):" /etc/subuid
+          grep "^$(id -un):" /etc/subgid
+          dpkg-query -W uidmap docker-ce docker-ce-cli docker-ce-rootless-extras docker-compose-plugin > reports/packages.txt
+      - name: Start user daemon, without changing AppArmor or cgroup policy
+        shell: bash
+        run: |
+          set -euo pipefail
+          # --force ONLY allows coexistence with the runner's existing rootful daemon.
+          # Every probe uses the user's explicit Unix socket, never the rootful daemon.
+          dockerd-rootless-setuptool.sh install --force 2>&1 | tee reports/rootless-start.log
+          systemctl --user is-active docker
+      - name: Execute fixed environment self-test in a real restricted container
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 infra/docker-environment/verify_docker.py --out reports/verified --allow-image-pull | tee reports/verify.log
+      - name: Stop only this job's user daemon
+        if: always()
+        shell: bash
+        run: |
+          if systemctl --user is-active --quiet docker; then systemctl --user stop docker; fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: docker-environment-evidence
+          path: reports/
+          retention-days: 14
+      - name: Summarize scope
+        if: always()
+        shell: bash
+        run: |
+          echo '## Rootless Docker environment only' >> "$GITHUB_STEP_SUMMARY"
+          echo 'Ephemeral hosted VM. No local 0.4.x product source, model calls, candidate bug fixes, or production deployment.' >> "$GITHUB_STEP_SUMMARY"
+          if test -f reports/verified/environment-result.json; then
+            echo '```json' >> "$GITHUB_STEP_SUMMARY"
+            cat reports/verified/environment-result.json >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+          fi
