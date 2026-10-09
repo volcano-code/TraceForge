@@ -1,0 +1,53 @@
+name: traceforge-postgres-dependencies
+on:
+  push:
+    branches: ['chore/sdk-environment-probe-20261005']
+    paths: ['.github/workflows/postgres-dependencies.yml']
+permissions:
+  contents: read
+concurrency:
+  group: postgres-dependencies-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  public-packages:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Download authenticated official Debian packages only
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p postgres-dependencies
+          docker pull debian:trixie-slim > postgres-dependencies/image-pull.log 2>&1
+          IMAGE=$(docker image inspect --format '{{.Id}}' debian:trixie-slim)
+          printf '%s\n' "$IMAGE" > postgres-dependencies/image-id.txt
+          # No checkout, product source, repository credentials, model key,
+          # application database or candidate-code execution in this job.
+          docker run --rm --pull=never \
+            --mount "type=bind,src=$PWD/postgres-dependencies,dst=/export" \
+            "$IMAGE" sh -eu -c '
+              apt-get update
+              apt-get --download-only install -y --no-install-recommends postgresql-17
+              cp /var/cache/apt/archives/*.deb /export/
+              cp /var/lib/apt/lists/*InRelease /export/
+              cd /export
+              for p in *.deb; do dpkg-deb -f "$p" Package Version Architecture; done > packages.txt
+              sha256sum *.deb > SHA256SUMS
+            ' > postgres-dependencies/download.log 2>&1
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: postgres-dependency-evidence
+          path: |
+            postgres-dependencies/*.log
+            postgres-dependencies/*.txt
+            postgres-dependencies/SHA256SUMS
+            postgres-dependencies/*InRelease
+          retention-days: 14
+      - uses: actions/upload-artifact@v4
+        if: success()
+        with:
+          name: postgres-offline-debs-linux-amd64
+          path: postgres-dependencies/*.deb
+          retention-days: 3
+          compression-level: 0
